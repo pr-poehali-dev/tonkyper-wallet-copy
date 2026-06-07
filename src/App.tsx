@@ -1,4 +1,25 @@
 import { useState, useEffect, useCallback } from "react";
+
+// ─── localStorage hook ────────────────────────────────────────────────────────
+
+function useLocalStorage<T>(key: string, initial: T): [T, (v: T | ((prev: T) => T)) => void] {
+  const [state, setState] = useState<T>(() => {
+    try {
+      const saved = localStorage.getItem(key);
+      return saved ? (JSON.parse(saved) as T) : initial;
+    } catch {
+      return initial;
+    }
+  });
+  const save = useCallback((v: T | ((prev: T) => T)) => {
+    setState(prev => {
+      const next = typeof v === "function" ? (v as (p: T) => T)(prev) : v;
+      try { localStorage.setItem(key, JSON.stringify(next)); } catch (e) { console.warn(e); }
+      return next;
+    });
+  }, [key]);
+  return [state, save];
+}
 import Icon from "@/components/ui/icon";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -817,7 +838,7 @@ function HistoryPage({ transactions, toast }: {
 
 // ─── Settings Page ────────────────────────────────────────────────────────────
 
-function SettingsPage({ toast }: { toast: (msg: string, type?: Toast["type"]) => void }) {
+function SettingsPage({ toast, onReset }: { toast: (msg: string, type?: Toast["type"]) => void; onReset: () => void }) {
   const [biometric, setBiometric] = useState(true);
   const [notifications, setNotifications] = useState(true);
   const [twoFA, setTwoFA] = useState(false);
@@ -980,6 +1001,23 @@ function SettingsPage({ toast }: { toast: (msg: string, type?: Toast["type"]) =>
         </div>
       </div>
 
+      <div className="mb-3">
+        <p className="text-xs text-muted-foreground uppercase tracking-wide mb-2 px-1">Данные</p>
+        <div className="glass rounded-2xl overflow-hidden">
+          <button onClick={() => { onReset(); toast("Данные сброшены до начальных", "info"); }}
+            className="w-full flex items-center gap-3 p-4 text-left transition-colors hover:bg-white/5">
+            <div className="w-9 h-9 rounded-xl bg-orange-400/10 flex items-center justify-center flex-shrink-0">
+              <Icon name="RotateCcw" fallback="Circle" size={16} className="text-orange-400" />
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-medium text-white">Сбросить данные</p>
+              <p className="text-xs text-muted-foreground">Вернуть демо-состояние кошелька</p>
+            </div>
+            <Icon name="ChevronRight" size={16} className="text-muted-foreground" />
+          </button>
+        </div>
+      </div>
+
       <button onClick={() => toast("Вы вышли из кошелька (демо)", "info")}
         className="w-full btn-ghost py-3.5 rounded-xl font-semibold flex items-center justify-center gap-2 text-destructive border border-destructive/30">
         <Icon name="LogOut" size={16} />Выйти из кошелька
@@ -1002,19 +1040,26 @@ const NAV_ITEMS = [
 // ─── App ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>("portfolio");
+  const [tab, setTab] = useLocalStorage<Tab>("tk_tab", "portfolio");
   const [loaded, setLoaded] = useState(false);
-  const [tokens, setTokens] = useState<Token[]>(INITIAL_TOKENS);
-  const [transactions, setTransactions] = useState<Transaction[]>(INITIAL_TRANSACTIONS);
-  const [nfts, setNfts] = useState<NFT[]>(INITIAL_NFTS);
+  const [tokens, setTokens] = useLocalStorage<Token[]>("tk_tokens", INITIAL_TOKENS);
+  const [transactions, setTransactions] = useLocalStorage<Transaction[]>("tk_txs", INITIAL_TRANSACTIONS);
+  const [nfts, setNfts] = useLocalStorage<NFT[]>("tk_nfts", INITIAL_NFTS);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [sendToken, setSendToken] = useState<string | undefined>();
   const [showNotifs, setShowNotifs] = useState(false);
+  const [lastSaved, setLastSaved] = useState<string>("");
 
   useEffect(() => {
     const t = setTimeout(() => setLoaded(true), 100);
     return () => clearTimeout(t);
   }, []);
+
+  // Метка "сохранено" при каждом изменении данных
+  useEffect(() => {
+    if (!loaded) return;
+    setLastSaved(new Date().toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" }));
+  }, [tokens, transactions, nfts, loaded]);
 
   const toast = useCallback((message: string, type: Toast["type"] = "info") => {
     const id = Date.now().toString();
@@ -1026,7 +1071,16 @@ export default function App() {
 
   const addTx = (tx: Transaction) => setTransactions(prev => [tx, ...prev]);
 
-  const handleRefresh = () => toast("Баланс обновлён", "success");
+  const handleRefresh = () => {
+    toast("Баланс обновлён ✓", "success");
+  };
+
+  const handleReset = () => {
+    setTokens(INITIAL_TOKENS);
+    setTransactions(INITIAL_TRANSACTIONS);
+    setNfts(INITIAL_NFTS);
+    setTab("portfolio");
+  };
 
   const handleSendToken = (sym: string) => {
     setSendToken(sym);
@@ -1055,6 +1109,12 @@ export default function App() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {lastSaved && (
+              <span className="text-[10px] text-muted-foreground font-mono flex items-center gap-1">
+                <Icon name="Save" size={10} className="text-cyan-400/60" />
+                {lastSaved}
+              </span>
+            )}
             <div className="flex items-center gap-1.5 glass px-2.5 py-1.5 rounded-full">
               <span className="pulse-dot" />
               <span className="text-xs font-medium" style={{ color: "#10f97a" }}>Mainnet</span>
@@ -1100,7 +1160,7 @@ export default function App() {
           {tab === "nft" && <NFTPage nfts={nfts} setNfts={setNfts} toast={toast} />}
           {tab === "swap" && <SwapPage tokens={tokens} addTx={addTx} toast={toast} />}
           {tab === "history" && <HistoryPage transactions={transactions} toast={toast} />}
-          {tab === "settings" && <SettingsPage toast={toast} />}
+          {tab === "settings" && <SettingsPage toast={toast} onReset={handleReset} />}
         </div>
 
         {/* Bottom Nav */}
